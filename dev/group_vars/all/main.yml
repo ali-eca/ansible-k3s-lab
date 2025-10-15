@@ -1,0 +1,65 @@
+---
+# Network Configuration
+cluster_network: "10.50.0.0/24"
+cluster_subnet: "10.50.0"
+
+# Node Configuration
+master_node:
+  hostname: "opti-3050"
+  ip: "{{ cluster_subnet }}.50"
+
+worker_nodes:
+  - hostname: "opti-3051"
+    ip: "{{ cluster_subnet }}.51"
+  - hostname: "opti-3053"
+    ip: "{{ cluster_subnet }}.53"
+  - hostname: "opti-3054"
+    ip: "{{ cluster_subnet }}.54"
+
+# Registry Configuration
+registry_host:
+  hostname: "opti-3054"
+  ip: "{{ cluster_subnet }}.54"
+  port: 32000
+  ui_port: 32001
+
+# MetalLB Configuration
+metallb:
+  ip_range_start: "10.50.0.100"
+  ip_range_end: "10.50.0.110"
+  ip_pool: "10.50.0.100-10.50.0.110"
+
+# Service Ports
+services:
+  k3s_api: 6443
+  vault: 8200
+  registry: 5000
+  registry_nodeport: "{{ registry_host.port }}"
+  registry_ui_nodeport: "{{ registry_host.ui_port }}"
+
+# K3s Configuration
+k3s:
+  version: "latest"
+  disable_components:
+    - traefik
+  server_url: "https://{{ master_node.ip }}:{{ services.k3s_api }}"
+
+# Vault Configuration
+vault:
+  address: "http://{{ master_node.ip }}:{{ services.vault }}"
+  mode: "dev"  # Change to "prod" for production
+
+# Backup Configuration
+backup:
+  directory: "/mnt/backup_disk/k3s-backup"
+  schedule:
+    hour: 2
+    minute: 0
+  retention_days: 30
+
+# Monitoring Configuration (for future implementation)
+monitoring:
+  enabled: true
+  namespace: "monitoring"
+  prometheus_port: 9090
+  grafana_port: 3000

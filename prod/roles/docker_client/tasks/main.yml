@@ -1,0 +1,122 @@
+---
+- name: Check if Docker daemon is running
+  systemd:
+    name: docker
+    state: started
+  register: docker_status
+
+- name: Display Docker status
+  debug:
+    var: docker_status
+
+- name: Create Docker client configuration directory
+  file:
+    path: /home/{{ ansible_user }}/.docker
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+
+- name: Configure Docker client
+  copy:
+    dest: /home/{{ ansible_user }}/.docker/config.json
+    content: |
+      {
+        "auths": {},
+        "credsStore": "",
+        "currentContext": "default",
+        "plugins": {
+          "-x-cli-hints": {
+            "enabled": "true"
+          }
+        }
+      }
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Add user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Test Docker connectivity
+  shell: docker ps
+  become_user: "{{ ansible_user }}"
+  register: docker_test
+  ignore_errors: true
+
+- name: Display Docker test result
+  debug:
+    var: docker_test
+
+- name: Test registry connectivity
+  shell: |
+    docker pull hello-world
+    docker tag hello-world {{ registry_host.ip }}:{{ registry_host.port }}/hello-world
+    docker push {{ registry_host.ip }}:{{ registry_host.port }}/hello-world
+    docker rmi {{ registry_host.ip }}:{{ registry_host.port }}/hello-world hello-world
+  become_user: "{{ ansible_user }}"
+  register: registry_test
+  ignore_errors: true
+
+- name: Display registry test result
+  debug:
+    var: registry_test
+
+- name: Create Docker daemon configuration directory
+  file:
+    path: /etc/docker
+    state: directory
+    mode: '0755'
+  when: inventory_hostname in groups['registry_host']
+
+- name: Configure Docker daemon for insecure registry
+  copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "insecure-registries": ["{{ registry_host.ip }}:{{ registry_host.port }}"]
+      }
+    mode: '0644'
+  notify: restart_docker
+  when: inventory_hostname in groups['registry_host']
+
+- name: Create systemd override directory for Docker
+  file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: '0755'
+  when: inventory_hostname in groups['registry_host']
+
+- name: Configure Docker daemon for remote access (development only)
+  copy:
+    dest: /etc/systemd/system/docker.service.d/override.conf
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/dockerd -H fd:// -H tcp://0.0.0.0:2375 --containerd=/run/containerd/containerd.sock
+    mode: '0644'
+  notify: restart_docker
+  when:
+    - enable_docker_remote_access | default(true)
+    - inventory_hostname in groups['registry_host']
+
+- name: Ensure Docker daemon uses secure configuration by default
+  copy:
+    dest: /etc/systemd/system/docker.service.d/override.conf
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+    mode: '0644'
+  notify: restart_docker
+  when:
+    - not (enable_docker_remote_access | default(true))
+    - inventory_hostname in groups['registry_host']
+
+- name: Reload systemd daemon after Docker configuration changes
+  systemd:
+    daemon_reload: true
+  when: inventory_hostname in groups['registry_host']

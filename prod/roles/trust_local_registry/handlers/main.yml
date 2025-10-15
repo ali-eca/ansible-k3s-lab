@@ -1,0 +1,3 @@
+- name: Reboot node if registry config changed
+  ansible.builtin.reboot:
+    reboot_timeout: 600

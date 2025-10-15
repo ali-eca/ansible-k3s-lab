@@ -1,0 +1,83 @@
+---
+- name: Validate master node requirements
+  block:
+    - name: Check if running as root or with sudo
+      fail:
+        msg: "This playbook must be run with sudo privileges"
+      when: ansible_user_uid != 0 and ansible_become != true
+
+    - name: Check available memory
+      fail:
+        msg: "Insufficient memory. K3s master requires at least 1GB RAM"
+      when: ansible_memtotal_mb < 1024
+
+    - name: Check available disk space
+      fail:
+        msg: "Insufficient disk space. K3s requires at least 5GB free space"
+      when: ansible_mounts | selectattr('mount', 'equalto', '/') | map(attribute='size_available') | first < 5368709120
+
+- name: Install dependencies on master
+  apt:
+    name:
+      - curl
+      - apt-transport-https
+      - ca-certificates
+      - software-properties-common
+      - gnupg2
+      - lm-sensors
+      - glances
+    update_cache: yes
+    state: present
+  register: apt_result
+  retries: 3
+  delay: 10
+  until: apt_result is succeeded
+
+- name: Install K3s on master without Traefik
+  shell: |
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable={{ k3s.disable_components | join(',--disable=') }}" sh -
+  args:
+    creates: /usr/local/bin/k3s
+  register: k3s_install_result
+  retries: 3
+  delay: 30
+  until: k3s_install_result is succeeded
+
+- name: Wait for K3s to be ready
+  wait_for:
+    port: "{{ services.k3s_api }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    delay: 10
+    timeout: 300
+  register: k3s_ready
+
+- name: Verify K3s installation
+  command: k3s kubectl get nodes
+  register: k3s_nodes
+  changed_when: false
+  retries: 5
+  delay: 10
+  until: k3s_nodes is succeeded
+
+- name: Fetch K3s node token
+  command: cat /var/lib/rancher/k3s/server/node-token
+  register: k3s_token_result
+  changed_when: false
+  retries: 3
+  delay: 5
+  until: k3s_token_result is succeeded
+
+- name: Validate K3s token
+  fail:
+    msg: "Failed to retrieve K3s token"
+  when: k3s_token_result.stdout | length == 0
+
+- set_fact:
+    k3s_token: "{{ k3s_token_result.stdout }}"
+
+- name: Display K3s master status
+  debug:
+    msg:
+      - "K3s master installed successfully"
+      - "API Server: {{ k3s.server_url }}"
+      - "Node status: {{ k3s_nodes.stdout_lines }}"

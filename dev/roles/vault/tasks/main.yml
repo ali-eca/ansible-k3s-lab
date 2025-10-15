@@ -1,0 +1,168 @@
+---
+- name: Validate Vault requirements
+  block:
+    - name: Check if Vault mode is defined
+      fail:
+        msg: "Vault mode must be defined (dev or prod)"
+      when: vault.mode is not defined
+
+    - name: Warn about dev mode in production
+      debug:
+        msg: "WARNING: Vault is running in dev mode. This is not suitable for production!"
+      when: vault.mode == "dev"
+
+- name: Add HashiCorp repo GPG key
+  shell: |
+    curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
+  args:
+    creates: /usr/share/keyrings/hashicorp.gpg
+  register: gpg_key_result
+  retries: 3
+  delay: 10
+  until: gpg_key_result is succeeded
+
+- name: Add HashiCorp repository (force jammy)
+  apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com jammy main"
+    state: present
+    filename: hashicorp
+  register: repo_result
+  retries: 3
+  delay: 10
+  until: repo_result is succeeded
+
+- name: Install Vault
+  apt:
+    name: vault
+    update_cache: yes
+    state: latest
+  register: vault_install
+  retries: 3
+  delay: 10
+  until: vault_install is succeeded
+
+- name: Create vault user
+  user:
+    name: vault
+    system: yes
+    shell: /bin/false
+    home: /opt/vault
+    create_home: no
+  when: vault.mode == "prod"
+
+- name: Create Vault directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: '0755'
+  loop:
+    - /opt/vault
+    - /opt/vault/data
+    - /opt/vault/logs
+    - /etc/vault.d
+  when: vault.mode == "prod"
+
+- name: Generate Vault configuration
+  template:
+    src: vault-config.hcl.j2
+    dest: /etc/vault.d/vault.hcl
+    owner: vault
+    group: vault
+    mode: '0640'
+  when: vault.mode == "prod"
+  notify: restart vault
+
+- name: Create Vault systemd service file
+  copy:
+    dest: /etc/systemd/system/vault.service
+    content: |
+      [Unit]
+      Description=HashiCorp Vault
+      Documentation=https://www.vaultproject.io/docs/
+      Requires=network-online.target
+      After=network-online.target
+      ConditionFileNotEmpty=/etc/vault.d/vault.hcl
+
+      [Service]
+      Type=notify
+      User=vault
+      Group=vault
+      ProtectSystem=full
+      ProtectHome=read-only
+      PrivateTmp=yes
+      PrivateDevices=yes
+      SecureBits=keep-caps
+      AmbientCapabilities=CAP_IPC_LOCK
+      CapabilityBoundingSet=CAP_SYSLOG CAP_IPC_LOCK
+      NoNewPrivileges=yes
+      ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
+      ExecReload=/bin/kill -HUP $MAINPID
+      KillMode=process
+      Restart=on-failure
+      RestartSec=5
+      TimeoutStopSec=30
+      StartLimitInterval=60
+      StartLimitBurst=3
+      LimitNOFILE=65536
+      LimitMEMLOCK=infinity
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: '0644'
+  when: vault.mode == "prod"
+  notify: restart vault
+
+- name: Enable and start Vault service (dev mode)
+  systemd:
+    name: vault
+    state: started
+    enabled: yes
+  when: vault.mode == "dev"
+
+- name: Enable and start Vault service (prod mode)
+  systemd:
+    name: vault
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  when: vault.mode == "prod"
+
+- name: Wait for Vault to be ready
+  wait_for:
+    port: "{{ services.vault }}"
+    host: "{{ ansible_default_ipv4.address }}"
+    delay: 5
+    timeout: 60
+
+- name: Check Vault status
+  uri:
+    url: "{{ vault.address }}/v1/sys/health"
+    method: GET
+    status_code: [200, 400, 429, 472, 473, 501, 503]
+  register: vault_health
+  retries: 5
+  delay: 10
+  until: vault_health is succeeded
+  ignore_errors: yes
+
+- name: Check if Vault is in dev mode and unsealed
+  uri:
+    url: "{{ vault.address }}/v1/sys/seal-status"
+    method: GET
+    status_code: [200, 400, 503]
+  register: vault_seal_status
+  when: vault.mode == "dev"
+  ignore_errors: yes
+
+- name: Display Vault status
+  debug:
+    msg:
+      - "Vault is running in {{ vault.mode }} mode"
+      - "Vault UI: {{ vault.address }}/ui"
+      - "Health status: {{ vault_health.status | default('Unknown') }}"
+      - "{% if vault.mode == 'prod' %}Initialize Vault with: vault operator init{% endif %}"
+      - "{% if vault.mode == 'dev' %}Dev mode root token available in systemd logs{% endif %}"
+      - "{% if vault_health.status == 400 %}Note: Status 400 may indicate Vault is starting or needs initialization{% endif %}"
+      - "Check Vault logs with: sudo journalctl -u vault -f"

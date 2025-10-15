@@ -1,0 +1,76 @@
+---
+- name: Ensure python3-pip is installed
+  apt:
+    name: python3-pip
+    state: present
+    update_cache: yes
+
+- name: Ensure Kubernetes Python libraries are installed
+  command: >
+    pip3 install kubernetes openshift pyyaml --break-system-packages
+
+- name: Apply MetalLB manifest
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition: "{{ lookup('url', 'https://raw.githubusercontent.com/metallb/metallb/v0.15.0/config/manifests/metallb-native.yaml', split_lines=False) | from_yaml_all | list  }}"
+  run_once: true
+
+- name: Check for any existing MetalLB IP pools
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    api_version: metallb.io/v1beta1
+    kind: IPAddressPool
+    namespace: metallb-system
+  register: all_ip_pools
+  run_once: true
+
+- name: Check for any existing MetalLB L2Advertisements
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    api_version: metallb.io/v1beta1
+    kind: L2Advertisement
+    namespace: metallb-system
+  register: all_l2_ads
+  run_once: true
+
+- name: Remove all existing MetalLB IP pools
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    api_version: metallb.io/v1beta1
+    kind: IPAddressPool
+    name: "{{ item.metadata.name }}"
+    namespace: metallb-system
+    state: absent
+  loop: "{{ all_ip_pools.resources }}"
+  when: all_ip_pools.resources | length > 0
+  run_once: true
+
+- name: Remove all existing MetalLB L2Advertisements
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    api_version: metallb.io/v1beta1
+    kind: L2Advertisement
+    name: "{{ item.metadata.name }}"
+    namespace: metallb-system
+    state: absent
+  loop: "{{ all_l2_ads.resources }}"
+  when: all_l2_ads.resources | length > 0
+  run_once: true
+
+- name: Wait for MetalLB resources cleanup
+  pause:
+    seconds: 15
+  when: (all_ip_pools.resources | length > 0) or (all_l2_ads.resources | length > 0)
+  run_once: true
+
+- name: Apply MetalLB IP address pool configuration
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition: "{{ lookup('template', 'metallb-config.yaml.j2') }}"
+  run_once: true
+  retries: 3
+  delay: 5
+  register: metallb_config_result
+  until: metallb_config_result is succeeded

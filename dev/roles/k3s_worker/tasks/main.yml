@@ -1,0 +1,94 @@
+---
+- name: Validate worker node requirements
+  block:
+    - name: Check if running as root or with sudo
+      fail:
+        msg: "This playbook must be run with sudo privileges"
+      when: ansible_user_uid != 0 and ansible_become != true
+
+    - name: Check available memory
+      fail:
+        msg: "Insufficient memory. K3s worker requires at least 512MB RAM"
+      when: ansible_memtotal_mb < 512
+
+    - name: Validate K3s token
+      fail:
+        msg: "K3s token is required for worker nodes"
+      when: k3s_token is not defined or k3s_token | length == 0
+
+    - name: Test connectivity to master node
+      wait_for:
+        host: "{{ master_node.ip }}"
+        port: "{{ services.k3s_api }}"
+        timeout: 30
+      delegate_to: localhost
+
+- name: Install dependencies on worker
+  apt:
+    name:
+      - curl
+      - apt-transport-https
+      - ca-certificates
+      - software-properties-common
+      - gnupg2
+      - lm-sensors
+      - glances
+    update_cache: yes
+    state: present
+  register: apt_result
+  retries: 3
+  delay: 10
+  until: apt_result is succeeded
+
+- name: Stop and disable k3s-agent service
+  systemd:
+    name: k3s-agent
+    state: stopped
+    enabled: no
+  become: yes
+  ignore_errors: yes
+
+- name: Remove old k3s agent files
+  file:
+    path: "{{ item }}"
+    state: absent
+  become: yes
+  loop:
+    - /usr/local/bin/k3s
+    - /etc/systemd/system/k3s-agent.service
+    - /etc/systemd/system/k3s-agent.service.env
+    - /var/lib/rancher/k3s/agent
+  ignore_errors: yes
+
+- name: Rejoin worker node to K3s cluster
+  shell: |
+    curl -sfL https://get.k3s.io | K3S_URL={{ k3s.server_url }} K3S_TOKEN={{ k3s_token }} sh -
+  become: yes
+  register: k3s_worker_install
+  retries: 3
+  delay: 30
+  until: k3s_worker_install is succeeded
+
+- name: Wait for k3s-agent service to be ready
+  systemd:
+    name: k3s-agent
+    state: started
+  register: k3s_agent_status
+  retries: 5
+  delay: 10
+  until: k3s_agent_status is succeeded
+
+- name: Verify worker node joined cluster
+  command: k3s kubectl get nodes {{ inventory_hostname }}
+  delegate_to: "{{ groups['master'][0] }}"
+  register: node_status
+  retries: 10
+  delay: 15
+  until: node_status is succeeded and 'Ready' in node_status.stdout
+  changed_when: false
+
+- name: Display worker node status
+  debug:
+    msg:
+      - "Worker node {{ inventory_hostname }} joined cluster successfully"
+      - "Node status: {{ node_status.stdout }}"

@@ -1,0 +1,42 @@
+- hosts: master
+  become: yes
+  vars:
+    k3s_token: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+  roles:
+    - k3s_master
+    - vault
+    - metallb
+    - ingress_nginx
+    - monitoring
+    - security
+    - backup
+    - testapp
+
+- hosts: workers
+  become: yes
+  vars:
+    k3s_token: "{{ hostvars[master_node.hostname].k3s_token }}"
+  roles:
+    - k3s_worker
+
+- name: Deploy Local Docker Registry
+  hosts: registry_host
+  roles:
+    - local_docker_registry
+
+- name: Configure Docker Client
+  hosts: registry_host
+  become: true
+  roles:
+    - docker_client
+
+- name: Trust Local Docker Registry
+  hosts: k3s_cluster
+  roles:
+    - trust_local_registry
+
+- name: Local Docker Registry UI
+  hosts: registry_host
+  become: true
+  roles:
+    - local_docker_registry_ui

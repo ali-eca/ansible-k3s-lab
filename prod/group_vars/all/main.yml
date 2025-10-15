@@ -1,0 +1,50 @@
+---
+# Network Configuration
+cluster_network: "10.40.0.0/24"
+cluster_subnet: "10.40.0"
+
+# Node Configuration
+master_node:
+  hostname: "opti-3052"
+  ip: "{{ cluster_subnet }}.52"
+
+worker_nodes:
+  - hostname: "opti-3055"
+    ip: "{{ cluster_subnet }}.55"
+
+# Registry Configuration (shared from dev cluster)
+registry_host:
+  hostname: "dev-registry"
+  ip: "10.50.0.54"
+  port: 32000
+  ui_port: 32001
+
+# MetalLB Configuration
+metallb:
+  ip_range_start: "10.40.0.100"
+  ip_range_end: "10.40.0.110"
+  ip_pool: "10.40.0.100-10.40.0.110"
+
+# Service Ports
+services:
+  k3s_api: 6443
+  vault: 8200
+  registry: 5000
+  registry_nodeport: "{{ registry_host.port }}"
+  registry_ui_nodeport: "{{ registry_host.ui_port }}"
+
+# K3s Configuration
+k3s:
+  version: "latest"
+  disable_components:
+    - traefik
+  server_url: "https://{{ master_node.ip }}:{{ services.k3s_api }}"
+
+# Vault Configuration (removed for lean prod cluster)
+
+# Monitoring Configuration (moved to dev cluster)
+monitoring:
+  enabled: false
+  namespace: "monitoring"
+  prometheus_port: 9090
+  grafana_port: 3000

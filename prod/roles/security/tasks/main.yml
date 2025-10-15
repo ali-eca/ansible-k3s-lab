@@ -1,0 +1,214 @@
+---
+- name: Create security namespace
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    name: security-system
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Apply Pod Security Standards to default namespace
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: default
+        labels:
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/audit: restricted
+          pod-security.kubernetes.io/warn: restricted
+
+- name: Apply Pod Security Standards to monitoring namespace
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ monitoring.namespace }}"
+        labels:
+          pod-security.kubernetes.io/enforce: baseline
+          pod-security.kubernetes.io/audit: baseline
+          pod-security.kubernetes.io/warn: baseline
+  when: monitoring.enabled | default(false)
+
+- name: Apply Pod Security Standards to security namespace
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: security-system
+        labels:
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/audit: restricted
+          pod-security.kubernetes.io/warn: restricted
+
+- name: Create Network Policy - Deny All
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: deny-all
+        namespace: default
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        - Egress
+
+- name: Create Network Policy - Allow DNS
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-dns
+        namespace: default
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Egress
+        egress:
+        - to: []
+          ports:
+          - protocol: UDP
+            port: 53
+          - protocol: TCP
+            port: 53
+
+- name: Create Network Policy - Allow All Registry Communication
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-registry-all
+        namespace: default
+      spec:
+        podSelector:
+          matchLabels:
+            app: registry
+        policyTypes:
+        - Ingress
+        - Egress
+        ingress:
+        - {}  # Allow all ingress
+        egress:
+        - {}  # Allow all egress
+
+- name: Create Network Policy - Allow All Registry UI Communication
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-registry-ui-all
+        namespace: default
+      spec:
+        podSelector:
+          matchLabels:
+            app: registry-ui
+        policyTypes:
+        - Ingress
+        - Egress
+        ingress:
+        - {}  # Allow all ingress
+        egress:
+        - {}  # Allow all egress
+
+- name: Create Network Policy - Allow All Monitoring Communication
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: allow-all-monitoring
+        namespace: "{{ monitoring.namespace }}"
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        - Egress
+        ingress:
+        - {}  # Allow all ingress traffic
+        egress:
+        - {}  # Allow all egress traffic
+  when: monitoring.enabled | default(false)
+
+- name: Create ServiceAccount for applications
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: app-service-account
+        namespace: default
+
+- name: Create Role for applications
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        namespace: default
+        name: app-role
+      rules:
+      - apiGroups: [""]
+        resources: ["pods", "services", "configmaps", "secrets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets"]
+        verbs: ["get", "list", "watch"]
+
+- name: Create RoleBinding for applications
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: app-role-binding
+        namespace: default
+      subjects:
+      - kind: ServiceAccount
+        name: app-service-account
+        namespace: default
+      roleRef:
+        kind: Role
+        name: app-role
+        apiGroup: rbac.authorization.k8s.io
+
+- name: Display security configuration status
+  debug:
+    msg:
+      - "Security policies applied successfully!"
+      - "Pod Security Standards: restricted (default), baseline (monitoring)"
+      - "Network Policies: deny-all, allow-dns, allow-registry-all, allow-registry-ui-all"
+      - "RBAC: app-service-account with limited permissions"
+      - "{% if monitoring.enabled %}Monitoring network policy: allow-all-monitoring (permissive for functionality){% endif %}"
+      - "Registry network policies: permissive to ensure CORS and UI functionality"
+      - "Note: Using Pod Security Standards (PSS) instead of deprecated Pod Security Policies"
+      - "Note: Monitoring and Registry namespaces use permissive network policies for functionality"

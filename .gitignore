@@ -1,0 +1,48 @@
+# Ansible
+*.retry
+.vault_pass
+.vault_pass.*
+ansible.cfg
+
+# Vault files (uncomment if you want to ignore encrypted vault files)
+# inventory/*/group_vars/*/vault.yml
+# inventory/*/host_vars/*/vault.yml
+
+# Temporary files
+*.tmp
+*.swp
+*.bak
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# YAML temporary files
+*.yaml.tmp
+*.yml.tmp
