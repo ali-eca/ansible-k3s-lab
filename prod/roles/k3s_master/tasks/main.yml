@@ -33,6 +33,35 @@
   delay: 10
   until: apt_result is succeeded
 
+- name: Check if K3s systemd service exists
+  stat:
+    path: /etc/systemd/system/k3s.service
+  register: k3s_service_check
+
+- name: Check if K3s agent service exists (worker mode)
+  stat:
+    path: /etc/systemd/system/k3s-agent.service
+  register: k3s_agent_service_check
+
+- name: Stop and disable K3s agent service if running as worker
+  systemd:
+    name: k3s-agent
+    state: stopped
+    enabled: no
+  when: k3s_agent_service_check.stat.exists
+
+- name: Remove K3s agent service file
+  file:
+    path: /etc/systemd/system/k3s-agent.service
+    state: absent
+  when: k3s_agent_service_check.stat.exists
+
+- name: Remove existing K3s binary if service doesn't exist
+  file:
+    path: /usr/local/bin/k3s
+    state: absent
+  when: not k3s_service_check.stat.exists
+
 - name: Install K3s on master without Traefik
   shell: |
     curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable={{ k3s.disable_components | join(',--disable=') }}" sh -
@@ -43,20 +72,53 @@
   delay: 30
   until: k3s_install_result is succeeded
 
+- name: Debug K3s installation result
+  debug:
+    msg: "K3s install result: {{ k3s_install_result }}"
+
+- name: Check if systemd service file exists after install
+  stat:
+    path: /etc/systemd/system/k3s.service
+  register: k3s_service_file_check
+
+- name: Debug systemd service file check
+  debug:
+    msg: "K3s service file exists: {{ k3s_service_file_check.stat.exists }}"
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+  when: k3s_service_file_check.stat.exists
+
+- name: Enable and start K3s service
+  systemd:
+    name: k3s
+    state: started
+    enabled: yes
+  when: k3s_service_file_check.stat.exists
+
+- name: Debug IP addresses
+  debug:
+    msg: "ansible_host: {{ ansible_host }}, ansible_default_ipv4.address: {{ ansible_default_ipv4.address }}"
+
 - name: Wait for K3s to be ready
   wait_for:
     port: "{{ services.k3s_api }}"
-    host: "{{ ansible_default_ipv4.address }}"
+    host: "{{ ansible_host }}"
     delay: 10
-    timeout: 300
+    timeout: 600
   register: k3s_ready
+
+- name: Wait a bit more for K3s to fully initialize
+  pause:
+    seconds: 30
 
 - name: Verify K3s installation
   command: k3s kubectl get nodes
   register: k3s_nodes
   changed_when: false
-  retries: 5
-  delay: 10
+  retries: 10
+  delay: 15
   until: k3s_nodes is succeeded
 
 - name: Fetch K3s node token
@@ -75,9 +137,31 @@
 - set_fact:
     k3s_token: "{{ k3s_token_result.stdout }}"
 
-- name: Display K3s master status
+- name: Copy K3s kubeconfig to local machine
+  fetch:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /tmp/k3s-prod-kubeconfig.yaml
+    flat: yes
+
+- name: Copy kubeconfig to home folder
+  copy:
+    src: /tmp/k3s-prod-kubeconfig.yaml
+    dest: ~/k3s-prod-kubeconfig.yaml
+    remote_src: no
+
+- name: Update kubeconfig server URL
+  replace:
+    path: ~/k3s-prod-kubeconfig.yaml
+    regexp: 'server: https://127\.0\.0\.1:6443'
+    replace: 'server: https://{{ master_node.ip }}:{{ services.k3s_api }}'
+
+- name: Display K3s access information
   debug:
     msg:
       - "K3s master installed successfully"
       - "API Server: {{ k3s.server_url }}"
       - "Node status: {{ k3s_nodes.stdout_lines }}"
+      - "Kubeconfig copied to: ~/k3s-prod-kubeconfig.yaml"
+      - "To use with skaffold, set KUBECONFIG environment variable:"
+      - "export KUBECONFIG=~/k3s-prod-kubeconfig.yaml"
+      - "Or copy to ~/.kube/config for default kubectl access"
