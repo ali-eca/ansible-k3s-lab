@@ -49,6 +49,9 @@
     systemctl daemon-reexec
     systemctl daemon-reload
     systemctl restart docker
+  register: docker_restart
+  failed_when: docker_restart.rc != 0
+  ignore_errors: true
 
 - name: Start and enable Docker
   systemd:

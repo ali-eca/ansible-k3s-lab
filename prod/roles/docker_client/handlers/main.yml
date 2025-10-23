@@ -1,6 +1,0 @@
----
-- name: restart_docker
-  shell: |
-    systemctl daemon-reload
-    systemctl restart docker
-  listen: restart_docker

@@ -1,5 +1,0 @@
-- name: Deploy NGINX test app
-  kubernetes.core.k8s:
-    kubeconfig: /etc/rancher/k3s/k3s.yaml
-    state: present
-    definition: "{{ lookup('file', playbook_dir + '/test/nginx-test.yaml') }}"

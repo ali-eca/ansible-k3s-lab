@@ -142,18 +142,47 @@
     src: /etc/rancher/k3s/k3s.yaml
     dest: /tmp/k3s-prod-kubeconfig.yaml
     flat: yes
+  register: fetch_result
+  retries: 5
+  delay: 2
+  until: fetch_result is succeeded
 
-- name: Copy kubeconfig to home folder
-  copy:
-    src: /tmp/k3s-prod-kubeconfig.yaml
-    dest: ~/k3s-prod-kubeconfig.yaml
-    remote_src: no
+- name: Debug fetch result
+  debug:
+    msg: "Fetch result: {{ fetch_result }}"
+
+- name: Check if kubeconfig file exists on localhost
+  stat:
+    path: /tmp/k3s-prod-kubeconfig.yaml
+  register: kubeconfig_stat
+  delegate_to: localhost
+
+- name: Debug kubeconfig file status
+  debug:
+    msg: "Kubeconfig file exists: {{ kubeconfig_stat.stat.exists }}, path: /tmp/k3s-prod-kubeconfig.yaml"
 
 - name: Update kubeconfig server URL
   replace:
-    path: ~/k3s-prod-kubeconfig.yaml
+    path: /tmp/k3s-prod-kubeconfig.yaml
     regexp: 'server: https://127\.0\.0\.1:6443'
     replace: 'server: https://{{ master_node.ip }}:{{ services.k3s_api }}'
+  when: fetch_result is succeeded and kubeconfig_stat.stat.exists
+  delegate_to: localhost
+
+- name: Rename cluster, user, and context in kubeconfig to prod
+  replace:
+    path: /tmp/k3s-prod-kubeconfig.yaml
+    regexp: 'name: default'
+    replace: 'name: prod'
+  when: fetch_result is succeeded and kubeconfig_stat.stat.exists
+  delegate_to: localhost
+
+- name: Copy updated kubeconfig to prod folder in codebase
+  shell: cp /tmp/k3s-prod-kubeconfig.yaml ./k3s-prod-kubeconfig.yaml
+  args:
+    creates: k3s-prod-kubeconfig.yaml
+  when: fetch_result is succeeded and kubeconfig_stat.stat.exists
+  delegate_to: localhost
 
 - name: Display K3s access information
   debug:
@@ -162,6 +191,7 @@
       - "API Server: {{ k3s.server_url }}"
       - "Node status: {{ k3s_nodes.stdout_lines }}"
       - "Kubeconfig copied to: ~/k3s-prod-kubeconfig.yaml"
+      - "Context set to: prod"
       - "To use with skaffold, set KUBECONFIG environment variable:"
       - "export KUBECONFIG=~/k3s-prod-kubeconfig.yaml"
       - "Or copy to ~/.kube/config for default kubectl access"

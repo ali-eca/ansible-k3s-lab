@@ -49,6 +49,7 @@
                   port:
                     number: 5000
     state: present
+  when: registry_host is defined
 
 - name: Create registry service for ingress
   kubernetes.core.k8s:
@@ -68,3 +69,4 @@
           protocol: TCP
         type: ClusterIP
     state: present
+  when: registry_host is defined

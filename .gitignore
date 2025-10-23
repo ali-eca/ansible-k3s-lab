@@ -46,3 +46,4 @@ venv.bak/
 # YAML temporary files
 *.yaml.tmp
 *.yml.tmp
+setup-ansible.txt
